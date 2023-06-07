@@ -139,8 +139,10 @@ module overmind::nftango {
         property_version: u64,
         join_amount_requirement: u64
     ) {
+        // Check if the creator of the game already have a active game resource
         assert_nftango_store_does_not_exist(signer::address_of(account));
 
+        // Create a resource account under the creator's address to manage the game
         let (resource_signer, resource_cap) = account::create_resource_account(account, b"This is Random");
 
         let tokenId = token::create_token_id_raw(creator, collection_name, token_name, property_version);
@@ -165,6 +167,7 @@ module overmind::nftango {
     public entry fun cancel_game(
         account: &signer,
     ) acquires NFTangoStore {
+        // Game can only be cancelled if it has been initiated and an opponent has not joined
         let address = signer::address_of(account);
         assert_nftango_store_exists(address);
         assert_nftango_store_is_active(address);
@@ -175,8 +178,8 @@ module overmind::nftango {
         let store = borrow_global_mut<NFTangoStore>(address);
         let resource_signer = account::create_signer_with_capability(&store.signer_capability);
         
-        // Transfer NFT to account address
-        token::transfer(&resource_signer, store.creator_token_id, address, store.join_amount_requirement); 
+        // Transfer NFT back to account address
+        token::transfer(&resource_signer, store.creator_token_id, address, 1); 
 
         store.active = false;
     }
@@ -189,8 +192,10 @@ module overmind::nftango {
         token_names: vector<String>,
         property_versions: vector<u64>,
     ) acquires NFTangoStore {
+        // Check information present for all NFTs
         assert_vector_lengths_are_equal(creators, collection_names, token_names, property_versions);
 
+        // Create opponent NFTs from data
         let token_ids = vector::empty<TokenId>();
         let vec_len = vector::length(&creators);
         let i = 0;
@@ -207,6 +212,7 @@ module overmind::nftango {
             i = i+1;
         };
 
+        // Check that there isn't existing opponent and the NFTs provided meets the joining requirement
         let address = signer::address_of(account);
         assert_nftango_store_exists(game_address);
         assert_nftango_store_is_active(game_address);
@@ -216,7 +222,7 @@ module overmind::nftango {
         let store = borrow_global_mut<NFTangoStore>(game_address);
         let resource_signer = account::create_signer_with_capability(&store.signer_capability);
 
-        //Transfer to resource account
+        //Transfer oppoenent NFTs to resource account
         i = 0;
         while (i < vec_len){
             let current_token = vector::borrow<TokenId>(&token_ids, i);
@@ -241,6 +247,7 @@ module overmind::nftango {
     }
 
     public entry fun claim(account: &signer, game_address: address) acquires NFTangoStore {
+        // Check a claim has not occurred and the claimer is creator or opponent
         assert_nftango_store_exists(game_address);
         assert_nftango_store_is_not_active(game_address);
         assert_nftango_store_has_not_claimed(game_address);
@@ -251,28 +258,21 @@ module overmind::nftango {
         let tokens = store.opponent_token_ids;
         let token_len = vector::length<TokenId>(&tokens);
         let i = 0;
-        let unique_ids = vector::empty<TokenId>();
         let game_state = option::borrow<bool>(&store.did_creator_win);
+        let creator_token = store.creator_token_id;
         
-        // If the creator or opponent won
-        if(*game_state || signer::address_of(account)== *option::borrow<address>(&store.opponent_address)){
+        // If the creator won or opponent won
+        if((*game_state && signer::address_of(account) == game_address) 
+        || (!(*game_state) && signer::address_of(account) == *option::borrow<address>(&store.opponent_address))){
+            // Transfer the opponent token
             while(i < token_len){
                 let current_token = vector::borrow<TokenId>(&tokens, i);
 
-
-                //Check for TokenIds that are the same since they are transferred through amount already
-                let (check, _) = vector::index_of<TokenId>(&unique_ids, current_token);
-                if(check){
-                    i=i+1;
-                    continue
-                };
-
-                let amount = token::balance_of(signer::address_of(&resource_signer), *current_token);
-                token::transfer(&resource_signer, *current_token, signer::address_of(account), amount); 
+                token::transfer(&resource_signer, *current_token, signer::address_of(account), 1); 
                 i=i+1;
-                vector::push_back(&mut unique_ids, *current_token);
             };
-            
+            // Transfer the creator token
+            token::transfer(&resource_signer, creator_token, signer::address_of(account), 1); 
         };
         store.has_claimed = true;
     }
